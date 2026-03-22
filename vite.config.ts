@@ -8,5 +8,9 @@ export default defineConfig({
 		port: 3000,
 		strictPort: true,
 		host: '0.0.0.0'
+	},
+	ssr: {
+		external: ['better-sqlite3'],
+		noExternal: []
 	}
 });

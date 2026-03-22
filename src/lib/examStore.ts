@@ -1,179 +1,382 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
+import { browser } from '$app/environment';
+import { getExamDatabase } from '$lib/db/client';
+import {
+	importQuizBundleIntoRxDB,
+	persistSessionLayout,
+	computeShuffledLayout,
+	type SessionLayoutResult
+} from '$lib/db/quizOps';
+import { rebuildOrderedBlocksFromLayout, loadAnswersForParticipant } from '$lib/db/sessionRestore';
+import { loadUiSettings, saveUiSettings } from '$lib/db/uiSettings';
+import type { QuizBundle } from '$lib/types/quiz';
+import type { ExamState, ProctoringRules } from '$lib/types/exam';
+import { triggerSync } from '$lib/sync/backgroundSync';
 
-// Types
-export interface Question {
-    id: string;
-    text: string;
-    options: { id: string; text: string }[];
+export type { ProctoringRules } from '$lib/types/exam';
+export type { Question, ExamBlock } from '$lib/types/quiz';
+
+const SESSION_KEY = 'cbt_session_meta';
+
+function sessionMeta(): { sessionId: string; quizId: string; participantId: string } | null {
+	if (!browser) return null;
+	const raw = sessionStorage.getItem(SESSION_KEY);
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as { sessionId: string; quizId: string; participantId: string };
+	} catch {
+		return null;
+	}
 }
 
-export interface ExamBlock {
-    id: string;
-    title: string;
-    passage: string;
-    questions: Question[];
+function setSessionMeta(meta: { sessionId: string; quizId: string; participantId: string } | null) {
+	if (!browser) return;
+	if (meta) sessionStorage.setItem(SESSION_KEY, JSON.stringify(meta));
+	else sessionStorage.removeItem(SESSION_KEY);
 }
 
-export interface ProctoringRules {
-    tabSwitchDetection: boolean;
-    rightClickDisabled: boolean;
-    fullscreenRequired: boolean;
-    aiProctoring: boolean;
-}
-
-export interface ExamState {
-    studentId: string;
-    fullName: string;
-    currentBlockIndex: number;
-    currentQuestionIndex: number;
-    answers: Record<string, string>; // questionId -> optionId
-    flagged: Set<string>;
-    startTime: number | null;
-    durationMinutes: number;
-    maxQuestions: number;
-    proctoringRules: ProctoringRules;
-    isStarted: boolean;
-    isSubmitted: boolean;
-    infractions: number;
-}
-
-// Initial State
 const initialState: ExamState = {
-    studentId: '',
-    fullName: '',
-    currentBlockIndex: 0,
-    currentQuestionIndex: 0,
-    answers: {},
-    flagged: new Set(),
-    startTime: null,
-    durationMinutes: 120,
-    maxQuestions: 50,
-    proctoringRules: {
-        tabSwitchDetection: true,
-        rightClickDisabled: true,
-        fullscreenRequired: false,
-        aiProctoring: true
-    },
-    isStarted: false,
-    isSubmitted: false,
-    infractions: 0
+	studentId: '',
+	fullName: '',
+	quizId: '',
+	sessionId: '',
+	orderedBlocks: [],
+	currentGlobalIndex: 0,
+	answers: {},
+	flagged: new Set(),
+	startTime: null,
+	durationMinutes: 120,
+	maxQuestions: 50,
+	proctoringRules: {
+		tabSwitchDetection: true,
+		rightClickDisabled: true,
+		fullscreenRequired: false
+	},
+	isStarted: false,
+	isSubmitted: false,
+	jwtToken: '',
+	endsAtMs: 0,
+	serverSkewMs: 0,
+	securityEventCount: 0
 };
 
-// Mock Data
-export const mockExamBlocks: ExamBlock[] = [
-    {
-        id: 'block-1',
-        title: 'Quantum Resilience in Modern Computation',
-        passage: `The transition from classical binary logic to quantum superposition presents a fundamental shift in how we approach data integrity. Unlike classical bits, qubits maintain a state of flux until observed, necessitating a new protocol for computer-based testing environments where security and precision are paramount.\n\nEnvironmental decoherence remains the primary obstacle. External noise—even the minor electromagnetic fluctuations of a testing center—can cause quantum states to collapse. To combat this, Resilient Focus utilizes a Tonal Architecture within its UI to minimize cognitive load, ensuring the candidate's neural focus aligns with the machine's processing rhythm.\n\nObservers must note that the validation of quantum-encrypted packets relies on the JWT mechanism previously discussed in technical documentation. This ensures that time-tampering is physically impossible within the decoherence window of the session.`,
-        questions: [
-            {
-                id: 'q1',
-                text: 'Based on the passage, what is identified as the primary threat to maintaining quantum states in a testing environment?',
-                options: [
-                    { id: 'a', text: 'Inherent flaws in binary logic processing' },
-                    { id: 'b', text: 'Environmental decoherence and noise' },
-                    { id: 'c', text: 'Improper implementation of JWT mechanisms' },
-                    { id: 'd', text: 'The candidate\'s neural focus levels' }
-                ]
-            },
-            {
-                id: 'q2',
-                text: 'How does Resilient Focus attempt to align candidate focus with machine processing?',
-                options: [
-                    { id: 'a', text: 'By increasing electromagnetic shielding' },
-                    { id: 'b', text: 'Through the use of Tonal Architecture in the UI' },
-                    { id: 'c', text: 'By enforcing strict JWT validation' },
-                    { id: 'd', text: 'By eliminating classical binary logic' }
-                ]
-            }
-        ]
-    },
-    {
-        id: 'block-2',
-        title: 'Architecture & Engineering: Offline-First',
-        passage: `Offline-first architecture is a design paradigm that ensures an application remains functional without a continuous internet connection. Unlike "offline-capable" systems, which often treat network loss as an error state, offline-first systems prioritize local data storage as the primary source of truth.\n\nKey to this approach is the use of persistent local databases (like IndexedDB or SQLite) and background synchronization mechanisms. When a connection is re-established, the system must reconcile local changes with the server, often using Conflict-Free Replicated Data Types (CRDTs) or operational transformation to resolve data discrepancies.`,
-        questions: [
-            {
-                id: 'q3',
-                text: 'Which of the following are characteristics of an offline-first architecture?',
-                options: [
-                    { id: 'a', text: 'Treating local storage as the primary source of truth' },
-                    { id: 'b', text: 'Requirement for continuous high-bandwidth connection' },
-                    { id: 'c', text: 'Eliminating the need for background synchronization' },
-                    { id: 'd', text: 'Treating network loss as a terminal error state' }
-                ]
-            }
-        ]
-    }
-];
+function flattenIndices(orderedBlocks: ExamState['orderedBlocks']) {
+	const out: { blockIdx: number; qIdx: number; questionId: string }[] = [];
+	for (let bi = 0; bi < orderedBlocks.length; bi++) {
+		for (let qi = 0; qi < orderedBlocks[bi].questions.length; qi++) {
+			out.push({
+				blockIdx: bi,
+				qIdx: qi,
+				questionId: orderedBlocks[bi].questions[qi].id
+			});
+		}
+	}
+	return out;
+}
 
-// Store with persistence
+async function upsertAnswerRecord(
+	participantId: string,
+	questionId: string,
+	partial: { selected_option_id?: string; is_doubtful?: boolean }
+) {
+	const db = await getExamDatabase();
+	const id = `${participantId}_${questionId}`;
+	const existing = await db.answer_record.findOne(id).exec();
+	const prev = existing ? existing.toMutableJSON() : null;
+	const updated_at = Date.now();
+	const base = {
+		id,
+		participant_id: participantId,
+		question_id: questionId,
+		selected_option_id: partial.selected_option_id ?? prev?.selected_option_id ?? '',
+		is_doubtful: partial.is_doubtful ?? prev?.is_doubtful ?? false,
+		updated_at
+	};
+	await db.answer_record.upsert(base);
+}
+
+async function upsertParticipantState(
+	participantId: string,
+	quizId: string,
+	partial: Partial<{
+		status: string;
+		current_question_index: number;
+		answered_count: number;
+		time_remaining_seconds: number;
+		jwt_validation_token: string;
+	}>
+) {
+	const db = await getExamDatabase();
+	const existing = await db.participant_state.findOne(participantId).exec();
+	const prev = existing ? existing.toMutableJSON() : null;
+	const row = {
+		participant_id: participantId,
+		quiz_id: quizId,
+		status: partial.status ?? prev?.status ?? 'active',
+		current_question_index: partial.current_question_index ?? prev?.current_question_index ?? 0,
+		answered_count: partial.answered_count ?? prev?.answered_count ?? 0,
+		time_remaining_seconds:
+			partial.time_remaining_seconds ?? prev?.time_remaining_seconds ?? 0,
+		jwt_validation_token: partial.jwt_validation_token ?? prev?.jwt_validation_token ?? ''
+	};
+	await db.participant_state.upsert(row);
+}
+
 const createExamStore = () => {
-    const { subscribe, set, update } = writable<ExamState>(initialState);
+	const { subscribe, set, update } = writable<ExamState>(initialState);
 
-    return {
-        subscribe,
-        init: (studentId: string, fullName: string) => {
-            update(s => ({ ...s, studentId, fullName, isStarted: true, startTime: Date.now() }));
-        },
-        answer: (questionId: string, optionId: string) => {
-            update(s => ({
-                ...s,
-                answers: { ...s.answers, [questionId]: optionId }
-            }));
-        },
-        toggleFlag: (questionId: string) => {
-            update(s => {
-                const flagged = new Set(s.flagged);
-                if (flagged.has(questionId)) flagged.delete(questionId);
-                else flagged.add(questionId);
-                return { ...s, flagged };
-            });
-        },
-        nextQuestion: () => {
-            update(s => {
-                const currentBlock = mockExamBlocks[s.currentBlockIndex];
-                if (s.currentQuestionIndex < currentBlock.questions.length - 1) {
-                    return { ...s, currentQuestionIndex: s.currentQuestionIndex + 1 };
-                } else if (s.currentBlockIndex < mockExamBlocks.length - 1) {
-                    return { ...s, currentBlockIndex: s.currentBlockIndex + 1, currentQuestionIndex: 0 };
-                }
-                return s;
-            });
-        },
-        prevQuestion: () => {
-            update(s => {
-                if (s.currentQuestionIndex > 0) {
-                    return { ...s, currentQuestionIndex: s.currentQuestionIndex - 1 };
-                } else if (s.currentBlockIndex > 0) {
-                    const prevBlock = mockExamBlocks[s.currentBlockIndex - 1];
-                    return { ...s, currentBlockIndex: s.currentBlockIndex - 1, currentQuestionIndex: prevBlock.questions.length - 1 };
-                }
-                return s;
-            });
-        },
-        goToQuestion: (blockIdx: number, qIdx: number) => {
-            update(s => ({ ...s, currentBlockIndex: blockIdx, currentQuestionIndex: qIdx }));
-        },
-        addInfraction: () => {
-            update(s => ({ ...s, infractions: s.infractions + 1 }));
-        },
-        submit: () => {
-            update(s => ({ ...s, isSubmitted: true }));
-        },
-        updateSettings: (settings: Partial<{ durationMinutes: number, maxQuestions: number, proctoringRules: Partial<ProctoringRules> }>) => {
-            update(s => ({
-                ...s,
-                durationMinutes: settings.durationMinutes ?? s.durationMinutes,
-                maxQuestions: settings.maxQuestions ?? s.maxQuestions,
-                proctoringRules: {
-                    ...s.proctoringRules,
-                    ...settings.proctoringRules
-                }
-            }));
-        },
-        reset: () => set(initialState)
-    };
+	const syncNav = async (globalIndex: number) => {
+		const s = get({ subscribe });
+		if (!s.studentId || !s.quizId) return;
+		await upsertParticipantState(s.studentId, s.quizId, {
+			current_question_index: globalIndex,
+			answered_count: Object.keys(s.answers).length
+		});
+		void triggerSync();
+	};
+
+	const store = {
+		subscribe,
+		/** Call once in browser (e.g. layout) to hydrate UI settings from RxDB */
+		async initClientDb(): Promise<void> {
+			if (!browser) return;
+			const ui = await loadUiSettings();
+			update((s) => ({
+				...s,
+				durationMinutes: ui.durationMinutes,
+				maxQuestions: ui.maxQuestions,
+				proctoringRules: ui.proctoringRules
+			}));
+		},
+		async tryRestoreSession(): Promise<boolean> {
+			if (!browser) return false;
+			const meta = sessionMeta();
+			if (!meta) return false;
+			const blocks = await rebuildOrderedBlocksFromLayout(meta.quizId, meta.sessionId);
+			if (!blocks?.length) {
+				setSessionMeta(null);
+				return false;
+			}
+			const { answers, flagged } = await loadAnswersForParticipant(meta.participantId);
+			const ui = await loadUiSettings();
+			update((s) => ({
+				...s,
+				studentId: meta.participantId,
+				fullName: s.fullName,
+				quizId: meta.quizId,
+				sessionId: meta.sessionId,
+				orderedBlocks: blocks,
+				currentGlobalIndex: 0,
+				answers,
+				flagged,
+				durationMinutes: ui.durationMinutes,
+				maxQuestions: ui.maxQuestions,
+				proctoringRules: ui.proctoringRules,
+				isStarted: true,
+				isSubmitted: false,
+				startTime: Date.now()
+			}));
+			return true;
+		},
+		async unlockAndStartSession(opts: {
+			studentId: string;
+			fullName: string;
+			bundle: QuizBundle;
+			jwtToken: string;
+			endsAtMs: number;
+			serverNowMs: number;
+		}): Promise<void> {
+			const { studentId, fullName, bundle, jwtToken, endsAtMs, serverNowMs } = opts;
+			await importQuizBundleIntoRxDB(bundle);
+			const layout: SessionLayoutResult = computeShuffledLayout(bundle);
+			await persistSessionLayout(studentId, bundle.quiz_metadata.quiz_id, layout);
+
+			const skew = serverNowMs - Date.now();
+			setSessionMeta({
+				sessionId: layout.sessionId,
+				quizId: bundle.quiz_metadata.quiz_id,
+				participantId: studentId
+			});
+
+			const ui = await loadUiSettings();
+			update(() => ({
+				...initialState,
+				studentId,
+				fullName,
+				quizId: bundle.quiz_metadata.quiz_id,
+				sessionId: layout.sessionId,
+				orderedBlocks: layout.orderedBlocks,
+				currentGlobalIndex: 0,
+				answers: {},
+				flagged: new Set(),
+				startTime: Date.now(),
+				durationMinutes: bundle.quiz_metadata.duration_minutes || ui.durationMinutes,
+				maxQuestions: ui.maxQuestions,
+				proctoringRules: ui.proctoringRules,
+				isStarted: true,
+				isSubmitted: false,
+				jwtToken,
+				endsAtMs,
+				serverSkewMs: skew,
+				securityEventCount: 0
+			}));
+
+			await upsertParticipantState(studentId, bundle.quiz_metadata.quiz_id, {
+				status: 'active',
+				current_question_index: 0,
+				answered_count: 0,
+				time_remaining_seconds: Math.floor((endsAtMs - serverNowMs) / 1000),
+				jwt_validation_token: jwtToken
+			});
+			void triggerSync();
+		},
+		/** Legacy: init without bundle (kept for compatibility) — prefer unlockAndStartSession */
+		init(studentId: string, fullName: string) {
+			update((s) => ({
+				...s,
+				studentId,
+				fullName,
+				isStarted: true,
+				startTime: Date.now()
+			}));
+		},
+		async answer(questionId: string, optionId: string) {
+			const s = get({ subscribe });
+			if (!s.studentId) return;
+			const answers = { ...s.answers, [questionId]: optionId };
+			const answeredCount = Object.keys(answers).length;
+			update((st) => ({
+				...st,
+				answers
+			}));
+			await upsertAnswerRecord(s.studentId, questionId, { selected_option_id: optionId });
+			await upsertParticipantState(s.studentId, s.quizId, {
+				answered_count: answeredCount,
+				current_question_index: s.currentGlobalIndex
+			});
+			void triggerSync();
+		},
+		async toggleFlag(questionId: string) {
+			const s = get({ subscribe });
+			if (!s.studentId) return;
+			const flagged = new Set(s.flagged);
+			let doubtful: boolean;
+			if (flagged.has(questionId)) {
+				flagged.delete(questionId);
+				doubtful = false;
+			} else {
+				flagged.add(questionId);
+				doubtful = true;
+			}
+			update((st) => ({ ...st, flagged }));
+			const opt = s.answers[questionId] ?? '';
+			await upsertAnswerRecord(s.studentId, questionId, {
+				selected_option_id: opt,
+				is_doubtful: doubtful
+			});
+			void triggerSync();
+		},
+		nextQuestion() {
+			update((s) => {
+				const flat = flattenIndices(s.orderedBlocks);
+				if (flat.length === 0) return s;
+				const next = Math.min(s.currentGlobalIndex + 1, flat.length - 1);
+				queueMicrotask(() => void syncNav(next));
+				return { ...s, currentGlobalIndex: next };
+			});
+		},
+		prevQuestion() {
+			update((s) => {
+				const prev = Math.max(s.currentGlobalIndex - 1, 0);
+				queueMicrotask(() => void syncNav(prev));
+				return { ...s, currentGlobalIndex: prev };
+			});
+		},
+		goToQuestion(globalIndex: number) {
+			update((s) => {
+				const flat = flattenIndices(s.orderedBlocks);
+				const idx = Math.max(0, Math.min(globalIndex, Math.max(0, flat.length - 1)));
+				queueMicrotask(() => void syncNav(idx));
+				return { ...s, currentGlobalIndex: idx };
+			});
+		},
+		async addSecurityEvent(
+			eventType: 'tab_switched' | 'fullscreen_exited' | 'time_tampering_detected',
+			details?: string
+		) {
+			const s = get({ subscribe });
+			if (!s.studentId || !s.quizId) return;
+			const db = await getExamDatabase();
+			const log_id = `${s.studentId}_${eventType}_${Date.now()}`;
+			await db.security_log.insert({
+				log_id,
+				participant_id: s.studentId,
+				quiz_id: s.quizId,
+				event_type: eventType,
+				timestamp: Date.now(),
+				details: details ?? ''
+			});
+			update((st) => ({ ...st, securityEventCount: st.securityEventCount + 1 }));
+			void triggerSync();
+		},
+		addInfraction() {
+			void store.addSecurityEvent('tab_switched');
+		},
+		async submit() {
+			const s = get({ subscribe });
+			update((st) => ({ ...st, isSubmitted: true }));
+			if (s.studentId && s.quizId) {
+				await upsertParticipantState(s.studentId, s.quizId, { status: 'submitted' });
+			}
+			setSessionMeta(null);
+			void triggerSync();
+		},
+		async updateSettings(settings: Partial<{
+			durationMinutes: number;
+			maxQuestions: number;
+			proctoringRules: Partial<ProctoringRules>;
+		}>) {
+			update((s) => {
+				const proctoringRules = {
+					...s.proctoringRules,
+					...settings.proctoringRules
+				};
+				return {
+					...s,
+					durationMinutes: settings.durationMinutes ?? s.durationMinutes,
+					maxQuestions: settings.maxQuestions ?? s.maxQuestions,
+					proctoringRules
+				};
+			});
+			const s = get({ subscribe });
+			await saveUiSettings({
+				durationMinutes: s.durationMinutes,
+				maxQuestions: s.maxQuestions,
+				proctoringRules: s.proctoringRules
+			});
+		},
+		setJwtTiming(jwt: string, endsAtMs: number, serverNowMs: number) {
+			update((s) => ({
+				...s,
+				jwtToken: jwt,
+				endsAtMs,
+				serverSkewMs: serverNowMs - Date.now()
+			}));
+		},
+		reset: () => {
+			setSessionMeta(null);
+			set(initialState);
+		}
+	};
+	return store;
 };
 
 export const examStore = createExamStore();
+
+/** Flattened question order for grids (1-based display uses index + 1) */
+export function getFlatQuestionRefs(orderedBlocks: ExamState['orderedBlocks']) {
+	return flattenIndices(orderedBlocks);
+}
+
+/** @deprecated replaced by orderedBlocks from store */
+export const mockExamBlocks: import('$lib/types/quiz').ExamBlock[] = [];

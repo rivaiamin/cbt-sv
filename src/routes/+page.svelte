@@ -2,11 +2,16 @@
 	import { Shield, WifiOff, KeyRound, HelpCircle, ArrowRight, ClipboardCheck, MousePointer2, CloudOff, Timer, Info, UserCircle } from 'lucide-svelte';
 	import { examStore } from '$lib/examStore';
 	import { goto } from '$app/navigation';
+	import { verifyTotp } from '$lib/totp';
+	import { decryptQuizPayload } from '$lib/crypto/payload';
+	import type { QuizBundle } from '$lib/types/quiz';
 
 	let studentId = '';
 	let fullName = '';
 	let passcode = '';
 	let error = '';
+	let loading = false;
+	let passcodeIntervalSec = 30;
 
 	async function enterFullscreen() {
 		const elem = document.documentElement;
@@ -30,7 +35,9 @@
 	}
 
 	async function handleStart() {
-		if (!studentId || !fullName || passcode.length < 6) {
+		error = '';
+		const code = passcode.replace(/\s/g, '');
+		if (!studentId || !fullName || code.length !== 6) {
 			error = 'Please fill all fields correctly.';
 			return;
 		}
@@ -43,8 +50,47 @@
 			}
 		}
 
-		examStore.init(studentId, fullName);
-		goto('/exam');
+		loading = true;
+		try {
+			const q = await fetch('/api/quiz');
+			if (!q.ok) throw new Error('Failed to load quiz bundle');
+			const { metadata, encrypted_payload } = await q.json();
+			passcodeIntervalSec = metadata.passcode_interval ?? 30;
+
+			if (!verifyTotp(metadata.passcode_seed, code, passcodeIntervalSec)) {
+				error = 'Invalid or expired passcode.';
+				return;
+			}
+
+			const plain = await decryptQuizPayload(metadata.passcode_seed, encrypted_payload);
+			const bundle = JSON.parse(plain) as QuizBundle;
+
+			const sess = await fetch('/api/session/start', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					participant_id: studentId,
+					full_name: fullName,
+					quiz_id: metadata.quiz_id
+				})
+			});
+			if (!sess.ok) throw new Error('Could not start server session');
+			const { token, server_now, ends_at } = await sess.json();
+
+			await examStore.unlockAndStartSession({
+				studentId,
+				fullName,
+				bundle,
+				jwtToken: token,
+				endsAtMs: ends_at,
+				serverNowMs: server_now
+			});
+			await goto('/exam');
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not start exam';
+		} finally {
+			loading = false;
+		}
 	}
 </script>
 
@@ -67,7 +113,7 @@
 	<div class="flex-1 w-full space-y-8">
 		<div class="space-y-4">
 			<h1 class="text-4xl font-headline font-extrabold text-primary tracking-tight">Secure Exam Access</h1>
-			<p class="text-on-surface-variant max-w-md">Please verify your identity and enter the dynamic passcode provided by your proctor to initialize the secure testing environment.</p>
+			<p class="text-on-surface-variant max-w-md">Verify your identity and enter the TOTP code from your authenticator (same interval as the operator dashboard).</p>
 		</div>
 
 		<form class="space-y-6" onsubmit={(e) => { e.preventDefault(); handleStart(); }}>
@@ -97,7 +143,7 @@
 			<div class="p-6 rounded-xl bg-surface-container-highest border border-outline-variant/20 space-y-4">
 				<div class="flex items-center gap-3">
 					<KeyRound class="text-primary w-5 h-5" />
-					<h2 class="text-lg font-headline font-bold text-primary">Enter Dynamic Passcode</h2>
+					<h2 class="text-lg font-headline font-bold text-primary">Enter TOTP Passcode</h2>
 				</div>
 				<div class="relative">
 					<label for="passcode" class="sr-only">Passcode</label>
@@ -105,6 +151,8 @@
 						id="passcode"
 						bind:value={passcode}
 						maxlength="6"
+						inputmode="numeric"
+						autocomplete="one-time-code"
 						class="w-full h-16 text-center text-3xl font-headline font-bold tracking-[0.5em] bg-white border-0 border-b-2 border-primary focus:ring-0 transition-all placeholder:opacity-30 uppercase rounded-t-lg" 
 						placeholder="000000" 
 						type="text"
@@ -113,7 +161,7 @@
 						<HelpCircle class="w-5 h-5" />
 					</div>
 				</div>
-				<p class="text-xs text-on-surface-variant font-medium">This code is uniquely generated for this session and valid for 5 minutes.</p>
+				<p class="text-xs text-on-surface-variant font-medium">Code rotates every {passcodeIntervalSec} seconds (TOTP).</p>
 			</div>
 
 			{#if error}
@@ -122,9 +170,10 @@
 
 			<button 
 				type="submit"
-				class="w-full h-14 rounded-xl bg-gradient-to-br from-primary to-primary-container text-white font-headline font-bold text-lg flex items-center justify-center gap-2 shadow-xl shadow-primary/20 hover:scale-[1.01] active:scale-95 transition-all"
+				disabled={loading}
+				class="w-full h-14 rounded-xl bg-gradient-to-br from-primary to-primary-container text-white font-headline font-bold text-lg flex items-center justify-center gap-2 shadow-xl shadow-primary/20 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-60"
 			>
-				Start Exam
+				{loading ? 'Starting…' : 'Start Exam'}
 				<ArrowRight class="w-5 h-5" />
 			</button>
 		</form>
@@ -143,7 +192,7 @@
 					</div>
 					<div class="space-y-1">
 						<p class="text-sm font-bold text-primary">No Tab Switching</p>
-						<p class="text-xs text-on-surface-variant leading-relaxed">Focus tracking is active. Leaving this tab will trigger an immediate session flag.</p>
+						<p class="text-xs text-on-surface-variant leading-relaxed">Leaving this tab records a security event and syncs to the operator.</p>
 					</div>
 				</li>
 				<li class="flex gap-4">
@@ -152,7 +201,7 @@
 					</div>
 					<div class="space-y-1">
 						<p class="text-sm font-bold text-primary">No Right-Clicking</p>
-						<p class="text-xs text-on-surface-variant leading-relaxed">Context menus and developer tools are disabled. Use keyboard shortcuts for navigation only.</p>
+						<p class="text-xs text-on-surface-variant leading-relaxed">Context menus are disabled during the exam when enabled in settings.</p>
 					</div>
 				</li>
 				<li class="flex gap-4">
@@ -161,7 +210,7 @@
 					</div>
 					<div class="space-y-1">
 						<p class="text-sm font-bold text-primary">Offline-First Engine</p>
-						<p class="text-xs text-on-surface-variant leading-relaxed">Your progress is saved locally. Brief internet drops will not interrupt the exam.</p>
+						<p class="text-xs text-on-surface-variant leading-relaxed">Answers persist in IndexedDB (RxDB) and sync when online.</p>
 					</div>
 				</li>
 			</ul>
@@ -169,8 +218,8 @@
 				<div class="flex items-center gap-3 p-3 rounded-lg bg-surface-container-highest">
 					<Timer class="text-secondary w-5 h-5" />
 					<div>
-						<p class="text-[10px] font-bold text-secondary uppercase tracking-widest">Duration</p>
-						<p class="text-sm font-bold text-primary">120 Minutes</p>
+						<p class="text-[10px] font-bold text-secondary uppercase tracking-widest">Default duration</p>
+						<p class="text-sm font-bold text-primary">{$examStore.durationMinutes} Minutes (from settings)</p>
 					</div>
 				</div>
 			</div>
@@ -179,7 +228,7 @@
 		<div class="p-4 rounded-xl border border-dashed border-outline-variant flex items-start gap-3">
 			<Info class="text-secondary w-5 h-5 flex-shrink-0" />
 			<p class="text-xs text-on-surface-variant leading-normal">
-				By clicking "Start Exam", you agree to the academic integrity policy and consent to proctoring via the Sentinel Core security module.
+				Use Google Authenticator or any TOTP app with the operator-provided seed to generate codes.
 			</p>
 		</div>
 	</aside>
@@ -188,13 +237,10 @@
 <footer class="mt-auto w-full max-w-5xl px-6 py-8 border-t border-surface-container flex flex-col md:flex-row justify-between items-center gap-4 text-xs font-medium text-slate-500 mx-auto">
 	<div class="flex items-center gap-6">
 		<span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> System Ready</span>
-		<span>Version: 4.8.2-Resilient</span>
+		<a class="hover:text-primary transition-colors" href="/operator">Operator</a>
 	</div>
 	<div class="flex items-center gap-6">
-		<a class="hover:text-primary transition-colors" href="/">Privacy Policy</a>
-		<a class="hover:text-primary transition-colors" href="/">Technical Support</a>
-		<span class="text-slate-300">|</span>
-		<span>Powered by Resilient Focus Engine</span>
+		<a class="hover:text-primary transition-colors" href="/settings">Settings</a>
 	</div>
 </footer>
 
@@ -202,12 +248,12 @@
 	<div class="glass-hud p-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-white/40">
 		<div class="flex flex-col">
 			<span class="text-[10px] font-bold text-primary/60 uppercase tracking-widest">Exam ID</span>
-			<span class="text-sm font-headline font-bold text-primary">8829-X (Mathematics)</span>
+			<span class="text-sm font-headline font-bold text-primary">demo-quiz-001</span>
 		</div>
 		<div class="h-8 w-[1px] bg-primary/10"></div>
 		<div class="flex items-center gap-2">
 			<UserCircle class="text-primary w-6 h-6" />
-			<span class="text-xs font-semibold text-primary">CBT Proctor: Ready</span>
+			<span class="text-xs font-semibold text-primary">Local-first sync</span>
 		</div>
 	</div>
 </div>

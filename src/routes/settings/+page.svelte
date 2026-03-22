@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { examStore } from '$lib/examStore';
-	import { Shield, Timer, HelpCircle, Save, ArrowLeft, Settings2, Eye, MousePointer2, Maximize2, Cpu } from 'lucide-svelte';
+	import { Shield, Timer, HelpCircle, Save, ArrowLeft, Settings2, Eye, MousePointer2, Maximize2 } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 
 	let duration = $examStore.durationMinutes;
@@ -8,8 +8,8 @@
 	let rules = { ...$examStore.proctoringRules };
 	let saved = false;
 
-	function handleSave() {
-		examStore.updateSettings({
+	async function handleSave() {
+		await examStore.updateSettings({
 			durationMinutes: duration,
 			maxQuestions: maxQuestions,
 			proctoringRules: rules
@@ -159,21 +159,6 @@
 					</label>
 				</div>
 
-				<div class="flex items-center justify-between p-4 rounded-xl bg-surface-container-low border border-outline-variant/10 hover:border-primary/30 transition-all group">
-					<div class="flex items-center gap-4">
-						<div class="w-10 h-10 rounded-lg bg-white flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
-							<Cpu class="w-5 h-5 text-primary" />
-						</div>
-						<div>
-							<p class="text-sm font-bold text-primary">AI Behavioral Proctoring</p>
-							<p class="text-[10px] text-on-surface-variant font-medium">Neural pattern analysis active</p>
-						</div>
-					</div>
-					<label class="relative inline-flex items-center cursor-pointer">
-						<input type="checkbox" bind:checked={rules.aiProctoring} class="sr-only peer">
-						<div class="w-11 h-6 bg-surface-container rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-					</label>
-				</div>
 			</div>
 		</section>
 	</div>

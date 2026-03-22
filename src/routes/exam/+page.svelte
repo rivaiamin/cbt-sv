@@ -1,22 +1,28 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { examStore, mockExamBlocks } from '$lib/examStore';
+	import { get } from 'svelte/store';
+	import { examStore, getFlatQuestionRefs } from '$lib/examStore';
 	import { goto } from '$app/navigation';
 	import { Timer, User, BookOpen, Flag, ChevronLeft, ChevronRight, TriangleAlert, HelpCircle, LogOut, Maximize2 } from 'lucide-svelte';
 	import { browser } from '$app/environment';
+	import ExamTimerWorker from '$lib/workers/examTimer.worker.ts?worker';
 
-	let timeRemaining = '01:42:58';
-	let timerInterval: ReturnType<typeof setInterval> | undefined;
+	let timeRemaining = '00:00:00';
+	let timerWorker: Worker | null = null;
+	let hbTimer: ReturnType<typeof setInterval> | null = null;
 	let isFullscreen = true;
 
-	$: currentBlock = mockExamBlocks[$examStore.currentBlockIndex];
-	$: currentQuestion = currentBlock.questions[$examStore.currentQuestionIndex];
-	$: isFlagged = $examStore.flagged.has(currentQuestion.id);
-	$: selectedOption = $examStore.answers[currentQuestion.id];
+	$: flat = getFlatQuestionRefs($examStore.orderedBlocks);
+	$: ref = flat[$examStore.currentGlobalIndex];
+	$: currentBlock = ref ? $examStore.orderedBlocks[ref.blockIdx] : null;
+	$: currentQuestion = ref && currentBlock ? currentBlock.questions[ref.qIdx] : null;
+	$: isFlagged = currentQuestion ? $examStore.flagged.has(currentQuestion.id) : false;
+	$: selectedOption = currentQuestion ? $examStore.answers[currentQuestion.id] : undefined;
+	$: totalQuestions = flat.length;
 
 	function checkFullscreen() {
 		if (!browser) return true;
-		// @ts-expect-error: vendor-prefixed fullscreen properties
+		// @ts-expect-error vendor
 		return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
 	}
 
@@ -25,13 +31,13 @@
 		try {
 			if (elem.requestFullscreen) {
 				await elem.requestFullscreen();
-			// @ts-expect-error: vendor-prefixed fullscreen properties
+			// @ts-expect-error vendor
 			} else if (elem.webkitRequestFullscreen) {
-				// @ts-expect-error: vendor-prefixed fullscreen properties
+				// @ts-expect-error vendor
 				await elem.webkitRequestFullscreen();
-			// @ts-expect-error: vendor-prefixed fullscreen properties
+			// @ts-expect-error vendor
 			} else if (elem.msRequestFullscreen) {
-				// @ts-expect-error: vendor-prefixed fullscreen properties
+				// @ts-expect-error vendor
 				await elem.msRequestFullscreen();
 			}
 		} catch (err) {
@@ -39,47 +45,105 @@
 		}
 	}
 
+	function setupTimerWorker() {
+		if (!browser) return;
+		if (timerWorker) {
+			timerWorker.terminate();
+			timerWorker = null;
+		}
+		const s = get(examStore);
+		if (!s.endsAtMs) return;
+		timerWorker = new ExamTimerWorker();
+		timerWorker.onmessage = (ev: MessageEvent<{ remainingFormatted: string }>) => {
+			timeRemaining = ev.data.remainingFormatted;
+		};
+		timerWorker.postMessage({
+			type: 'init',
+			endsAtMs: s.endsAtMs,
+			serverSkewMs: s.serverSkewMs
+		});
+	}
+
 	onMount(() => {
-		if (!$examStore.isStarted) {
-			goto('/');
+		if (!browser) return;
+
+		let unsub: () => void = () => {};
+
+		function wireExamUi() {
+			setupTimerWorker();
+			unsub = examStore.subscribe((s) => {
+				if (s.endsAtMs && timerWorker) {
+					timerWorker.postMessage({
+						type: 'init',
+						endsAtMs: s.endsAtMs,
+						serverSkewMs: s.serverSkewMs
+					});
+				}
+			});
+
+			hbTimer = setInterval(async () => {
+				const s = get(examStore);
+				if (!s.jwtToken) return;
+				try {
+					const r = await fetch('/api/session/heartbeat', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ token: s.jwtToken })
+					});
+					if (r.ok) {
+						const j = await r.json();
+						examStore.setJwtTiming(j.token, j.ends_at, j.server_now);
+					}
+				} catch {
+					/* offline */
+				}
+			}, 60_000);
 		}
-		
-		if (browser) {
-			const handleFullscreenChange = () => {
-				isFullscreen = checkFullscreen();
-			};
 
-			document.addEventListener('fullscreenchange', handleFullscreenChange);
-			document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-			document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-			document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+		if (!get(examStore).isStarted) {
+			void examStore.tryRestoreSession().then((ok) => {
+				if (!ok) {
+					void goto('/');
+					return;
+				}
+				wireExamUi();
+			});
+		} else {
+			wireExamUi();
+		}
 
+		const handleFullscreenChange = () => {
 			isFullscreen = checkFullscreen();
+		};
 
-			return () => {
-				document.removeEventListener('fullscreenchange', handleFullscreenChange);
-				document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-				document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
-				document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
-			};
-		}
+		document.addEventListener('fullscreenchange', handleFullscreenChange);
+		document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+		document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+		document.addEventListener('MSFullscreenChange', handleFullscreenChange);
 
-		// Simple countdown mock
-		let seconds = 120 * 60;
-		timerInterval = setInterval(() => {
-			seconds--;
-			const h = Math.floor(seconds / 3600);
-			const m = Math.floor((seconds % 3600) / 60);
-			const s = seconds % 60;
-			timeRemaining = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-		}, 1000);
+		isFullscreen = checkFullscreen();
+
+		return () => {
+			unsub();
+			if (timerWorker) {
+				timerWorker.terminate();
+				timerWorker = null;
+			}
+			if (hbTimer) clearInterval(hbTimer);
+			document.removeEventListener('fullscreenchange', handleFullscreenChange);
+			document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+			document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+			document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+		};
 	});
 
 	onDestroy(() => {
-		if (timerInterval) clearInterval(timerInterval);
+		if (timerWorker) timerWorker.terminate();
+		if (hbTimer) clearInterval(hbTimer);
 	});
 
 	function handleOptionSelect(optionId: string) {
+		if (!currentQuestion) return;
 		examStore.answer(currentQuestion.id, optionId);
 	}
 
@@ -91,13 +155,14 @@
 	}
 </script>
 
+{#if currentQuestion && currentBlock}
 <header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-white border-b border-outline-variant/10">
 	<div class="flex items-center gap-4">
 		<span class="text-xl font-bold text-primary font-headline tracking-tight">Resilient Focus CBT</span>
 		<div class="h-6 w-px bg-outline-variant mx-2"></div>
 		<div class="flex flex-col">
 			<span class="text-[10px] font-bold uppercase tracking-widest text-secondary">Candidate ID</span>
-			<span class="text-sm font-bold font-headline text-primary">ST-8829-X-2024</span>
+			<span class="text-sm font-bold font-headline text-primary">{$examStore.studentId}</span>
 		</div>
 	</div>
 
@@ -111,8 +176,8 @@
 		</div>
 		<div class="flex items-center gap-2">
 			<div class="text-right">
-				<p class="text-sm font-bold font-headline leading-tight">{$examStore.fullName || 'Marcus Holloway'}</p>
-				<p class="text-[11px] text-secondary font-medium">Advanced Systems Architecture</p>
+				<p class="text-sm font-bold font-headline leading-tight">{$examStore.fullName}</p>
+				<p class="text-[11px] text-secondary font-medium">{$examStore.quizId}</p>
 			</div>
 			<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center border-2 border-white">
 				<User class="text-primary w-5 h-5" />
@@ -122,25 +187,23 @@
 </header>
 
 <main class="pt-16 h-screen flex overflow-hidden">
-	<!-- Left Side: Reading Passage -->
 	<div class="w-1/2 overflow-y-auto p-10 bg-surface-container-low border-r border-outline-variant/10">
 		<div class="max-w-2xl mx-auto">
 			<div class="inline-flex items-center px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-bold mb-6">
 				<BookOpen class="w-4 h-4 mr-2" />
-				READING PASSAGE: BLOCK {$examStore.currentBlockIndex + 1}
+				READING PASSAGE: BLOCK {ref.blockIdx + 1}
 			</div>
-			<h1 class="text-3xl font-extrabold font-headline text-primary mb-6 leading-tight">{currentBlock.title}</h1>
+			<h1 class="text-3xl font-extrabold font-headline text-primary mb-6 leading-tight">Block {ref.blockIdx + 1}</h1>
 			<div class="space-y-6 text-on-surface/80 leading-relaxed text-lg whitespace-pre-line">
 				{currentBlock.passage}
 			</div>
 		</div>
 	</div>
 
-	<!-- Right Side: Question & Options -->
 	<div class="w-1/2 overflow-y-auto p-10 bg-white">
 		<div class="max-w-xl mx-auto">
 			<div class="flex justify-between items-center mb-10">
-				<span class="text-sm font-bold text-secondary tracking-widest uppercase">Question {$examStore.currentQuestionIndex + 1} of {currentBlock.questions.length}</span>
+				<span class="text-sm font-bold text-secondary tracking-widest uppercase">Question {$examStore.currentGlobalIndex + 1} of {totalQuestions}</span>
 				<button 
 					class="flex items-center gap-2 font-bold text-sm transition-all {isFlagged ? 'text-tertiary' : 'text-primary hover:underline'}"
 					onclick={() => examStore.toggleFlag(currentQuestion.id)}
@@ -195,27 +258,24 @@
 		</div>
 	</div>
 
-	<!-- Sidebar: Question Grid -->
 	<aside class="w-80 h-full bg-surface-container-low flex flex-col border-l border-outline-variant/10">
 		<div class="p-6 border-b border-outline-variant/10">
 			<h3 class="text-sm font-extrabold font-headline text-primary uppercase tracking-widest mb-4">Question Grid</h3>
 			<div class="grid grid-cols-5 gap-2">
-				{#each mockExamBlocks as block, bIdx (block.id)}
-					{#each block.questions as q, qIdx (q.id)}
-						{@const isAns = $examStore.answers[q.id]}
-						{@const isFlg = $examStore.flagged.has(q.id)}
-						{@const isAct = $examStore.currentBlockIndex === bIdx && $examStore.currentQuestionIndex === qIdx}
-						<button 
-							class="aspect-square flex items-center justify-center rounded-lg text-sm font-bold transition-all
-							{isAct ? 'ring-4 ring-primary bg-white text-primary' : 
-							 isAns ? 'bg-primary text-white' : 
-							 isFlg ? 'bg-tertiary-container text-white' : 
-							 'bg-surface-container-highest text-primary'}"
-							onclick={() => examStore.goToQuestion(bIdx, qIdx)}
-						>
-							{(bIdx * 10 + qIdx + 1).toString().padStart(2, '0')}
-						</button>
-					{/each}
+				{#each flat as r, globalIdx (r.questionId)}
+					{@const isAns = $examStore.answers[r.questionId]}
+					{@const isFlg = $examStore.flagged.has(r.questionId)}
+					{@const isAct = $examStore.currentGlobalIndex === globalIdx}
+					<button 
+						class="aspect-square flex items-center justify-center rounded-lg text-sm font-bold transition-all
+						{isAct ? 'ring-4 ring-primary bg-white text-primary' : 
+						 isAns ? 'bg-primary text-white' : 
+						 isFlg ? 'bg-tertiary-container text-white' : 
+						 'bg-surface-container-highest text-primary'}"
+						onclick={() => examStore.goToQuestion(globalIdx)}
+					>
+						{(globalIdx + 1).toString().padStart(2, '0')}
+					</button>
 				{/each}
 			</div>
 		</div>
@@ -239,14 +299,14 @@
 				</div>
 			</div>
 
-			{#if $examStore.infractions > 0}
+			{#if $examStore.securityEventCount > 0}
 				<div class="p-4 rounded-xl bg-error/5 border border-error/10">
 					<div class="flex items-center gap-2 text-error mb-2">
 						<TriangleAlert class="w-4 h-4" />
 						<span class="text-xs font-bold uppercase tracking-tight">Security Alert</span>
 					</div>
 					<p class="text-[11px] text-on-surface/70 leading-relaxed font-medium">
-						Session is monitored. {$examStore.infractions} tab switch(es) detected. Multiple infractions will trigger an auto-submit protocol.
+						{$examStore.securityEventCount} security event(s) recorded and synced.
 					</p>
 				</div>
 			{/if}
@@ -273,7 +333,7 @@
 			<div class="space-y-3">
 				<h2 class="text-2xl font-headline font-extrabold text-primary tracking-tight">Fullscreen Required</h2>
 				<p class="text-on-surface-variant leading-relaxed">
-					To maintain the integrity of this examination, fullscreen mode must be active at all times. Your session has been flagged.
+					Fullscreen mode must stay active. A security event was recorded.
 				</p>
 			</div>
 			<button 
@@ -283,11 +343,15 @@
 				<Maximize2 class="w-5 h-5" />
 				Re-enter Fullscreen
 			</button>
-			<p class="text-[10px] text-secondary font-bold uppercase tracking-widest">Sentinel Core Security Active</p>
 		</div>
 	</div>
 {/if}
 
-<button class="fixed bottom-6 right-[340px] w-12 h-12 rounded-full bg-white shadow-xl flex items-center justify-center text-primary hover:bg-primary hover:text-white transition-all border border-outline-variant/20">
+<button type="button" class="fixed bottom-6 right-[340px] w-12 h-12 rounded-full bg-white shadow-xl flex items-center justify-center text-primary hover:bg-primary hover:text-white transition-all border border-outline-variant/20" aria-label="Help">
 	<HelpCircle class="w-6 h-6" />
 </button>
+{:else}
+	<div class="min-h-screen flex items-center justify-center p-8">
+		<p class="text-secondary">Loading exam…</p>
+	</div>
+{/if}

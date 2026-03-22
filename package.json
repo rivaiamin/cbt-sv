@@ -10,9 +10,15 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-check --tsconfig ./tsconfig.json --watch",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test": "vitest run"
   },
   "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dexie": "^4.0.11",
+    "jose": "^5.9.6",
+    "otpauth": "^9.3.6",
+    "rxdb": "^15.39.0",
     "@sveltejs/kit": "^2.17.3",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.0.9",
@@ -24,6 +30,9 @@
     "vite": "^6.2.0"
   },
   "devDependencies": {
+    "@sveltejs/adapter-node": "^5.2.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@vitest/ui": "^3.0.5",
     "@eslint/js": "^10.0.1",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
@@ -36,6 +45,7 @@
     "svelte-check": "^4.1.4",
     "svelte-eslint-parser": "^1.6.0",
     "typescript": "^5.8.2",
-    "typescript-eslint": "^8.57.1"
+    "typescript-eslint": "^8.57.1",
+    "vitest": "^3.0.5"
   }
 }
