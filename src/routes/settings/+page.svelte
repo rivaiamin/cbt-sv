@@ -2,7 +2,6 @@
 	import { examStore } from '$lib/examStore';
 	import { Shield, Timer, HelpCircle, Save, ArrowLeft, Settings2, Eye, MousePointer2, Maximize2, Cpu } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
 
 	let duration = $examStore.durationMinutes;
 	let maxQuestions = $examStore.maxQuestions;

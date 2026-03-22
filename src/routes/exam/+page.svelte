@@ -2,21 +2,68 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { examStore, mockExamBlocks } from '$lib/examStore';
 	import { goto } from '$app/navigation';
-	import { Timer, User, BookOpen, Flag, ChevronLeft, ChevronRight, TriangleAlert, HelpCircle, LogOut } from 'lucide-svelte';
+	import { Timer, User, BookOpen, Flag, ChevronLeft, ChevronRight, TriangleAlert, HelpCircle, LogOut, Maximize2 } from 'lucide-svelte';
+	import { browser } from '$app/environment';
 
 	let timeRemaining = '01:42:58';
 	let timerInterval: ReturnType<typeof setInterval> | undefined;
+	let isFullscreen = true;
 
 	$: currentBlock = mockExamBlocks[$examStore.currentBlockIndex];
 	$: currentQuestion = currentBlock.questions[$examStore.currentQuestionIndex];
 	$: isFlagged = $examStore.flagged.has(currentQuestion.id);
 	$: selectedOption = $examStore.answers[currentQuestion.id];
 
+	function checkFullscreen() {
+		if (!browser) return true;
+		// @ts-expect-error: vendor-prefixed fullscreen properties
+		return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+	}
+
+	async function enterFullscreen() {
+		const elem = document.documentElement;
+		try {
+			if (elem.requestFullscreen) {
+				await elem.requestFullscreen();
+			// @ts-expect-error: vendor-prefixed fullscreen properties
+			} else if (elem.webkitRequestFullscreen) {
+				// @ts-expect-error: vendor-prefixed fullscreen properties
+				await elem.webkitRequestFullscreen();
+			// @ts-expect-error: vendor-prefixed fullscreen properties
+			} else if (elem.msRequestFullscreen) {
+				// @ts-expect-error: vendor-prefixed fullscreen properties
+				await elem.msRequestFullscreen();
+			}
+		} catch (err) {
+			console.error('Error attempting to enable full-screen mode:', err);
+		}
+	}
+
 	onMount(() => {
 		if (!$examStore.isStarted) {
 			goto('/');
 		}
 		
+		if (browser) {
+			const handleFullscreenChange = () => {
+				isFullscreen = checkFullscreen();
+			};
+
+			document.addEventListener('fullscreenchange', handleFullscreenChange);
+			document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+			document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+			document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+			isFullscreen = checkFullscreen();
+
+			return () => {
+				document.removeEventListener('fullscreenchange', handleFullscreenChange);
+				document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+				document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+				document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+			};
+		}
+
 		// Simple countdown mock
 		let seconds = 120 * 60;
 		timerInterval = setInterval(() => {
@@ -216,6 +263,30 @@
 		</div>
 	</aside>
 </main>
+
+{#if !isFullscreen && $examStore.proctoringRules.fullscreenRequired}
+	<div class="fixed inset-0 z-[100] bg-primary/95 backdrop-blur-md flex items-center justify-center p-6">
+		<div class="max-w-md w-full bg-white rounded-3xl p-10 shadow-2xl text-center space-y-8 animate-in fade-in zoom-in duration-300">
+			<div class="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
+				<Maximize2 class="w-10 h-10 text-primary animate-pulse" />
+			</div>
+			<div class="space-y-3">
+				<h2 class="text-2xl font-headline font-extrabold text-primary tracking-tight">Fullscreen Required</h2>
+				<p class="text-on-surface-variant leading-relaxed">
+					To maintain the integrity of this examination, fullscreen mode must be active at all times. Your session has been flagged.
+				</p>
+			</div>
+			<button 
+				onclick={enterFullscreen}
+				class="w-full py-4 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+			>
+				<Maximize2 class="w-5 h-5" />
+				Re-enter Fullscreen
+			</button>
+			<p class="text-[10px] text-secondary font-bold uppercase tracking-widest">Sentinel Core Security Active</p>
+		</div>
+	</div>
+{/if}
 
 <button class="fixed bottom-6 right-[340px] w-12 h-12 rounded-full bg-white shadow-xl flex items-center justify-center text-primary hover:bg-primary hover:text-white transition-all border border-outline-variant/20">
 	<HelpCircle class="w-6 h-6" />

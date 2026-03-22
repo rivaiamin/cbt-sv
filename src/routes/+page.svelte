@@ -8,11 +8,41 @@
 	let passcode = '';
 	let error = '';
 
-	function handleStart() {
+	async function enterFullscreen() {
+		const elem = document.documentElement;
+		try {
+			if (elem.requestFullscreen) {
+				await elem.requestFullscreen();
+			// @ts-expect-error: vendor-prefixed fullscreen properties
+			} else if (elem.webkitRequestFullscreen) {
+				// @ts-expect-error: vendor-prefixed fullscreen properties
+				await elem.webkitRequestFullscreen();
+			// @ts-expect-error: vendor-prefixed fullscreen properties
+			} else if (elem.msRequestFullscreen) {
+				// @ts-expect-error: vendor-prefixed fullscreen properties
+				await elem.msRequestFullscreen();
+			}
+		} catch (err) {
+			console.error('Error attempting to enable full-screen mode:', err);
+			return false;
+		}
+		return true;
+	}
+
+	async function handleStart() {
 		if (!studentId || !fullName || passcode.length < 6) {
 			error = 'Please fill all fields correctly.';
 			return;
 		}
+
+		if ($examStore.proctoringRules.fullscreenRequired) {
+			const success = await enterFullscreen();
+			if (!success) {
+				error = 'Fullscreen mode is required to start the exam. Please ensure your browser supports it and try again.';
+				return;
+			}
+		}
+
 		examStore.init(studentId, fullName);
 		goto('/exam');
 	}
