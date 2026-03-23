@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Shield, Users, Timer, RefreshCw } from 'lucide-svelte';
+	import { Shield, Users, Timer, RefreshCw, LogOut } from 'lucide-svelte';
+	import { goto } from '$app/navigation';
 
-	const quizId = 'demo-quiz-001';
+	let quizId = 'demo-quiz-001';
 
 	let loading = true;
 	let err = '';
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let payload: {
 		metadata: Record<string, unknown>;
 		participants: {
@@ -22,7 +24,7 @@
 		loading = true;
 		err = '';
 		try {
-			const r = await fetch(`/api/operator/${quizId}`);
+			const r = await fetch(`/api/operator/${encodeURIComponent(quizId)}`);
 			if (!r.ok) throw new Error('Failed to load');
 			payload = await r.json();
 		} catch (e) {
@@ -32,15 +34,37 @@
 		}
 	}
 
-	onMount(load);
+	async function poll() {
+		try {
+			const r = await fetch(`/api/operator/${encodeURIComponent(quizId)}`);
+			if (!r.ok) return;
+			payload = await r.json();
+		} catch {
+			// Ignore transient network issues while polling.
+		}
+	}
+
+	onMount(() => {
+		void load();
+		pollTimer = setInterval(() => void poll(), 3000);
+		return () => {
+			if (pollTimer) clearInterval(pollTimer);
+			pollTimer = null;
+		};
+	});
 
 	async function manualStart() {
-		await fetch(`/api/operator/${quizId}`, {
+		await fetch(`/api/operator/${encodeURIComponent(quizId)}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ operator_started_manually: true, start_time: Date.now() })
 		});
 		await load();
+	}
+
+	async function logout() {
+		await fetch('/api/auth/logout', { method: 'POST' });
+		await goto('/login');
 	}
 </script>
 
@@ -56,10 +80,21 @@
 			</div>
 			<div>
 				<h1 class="text-2xl font-headline font-bold text-primary">Operator dashboard</h1>
-				<p class="text-sm text-secondary">Quiz <code class="text-primary">{quizId}</code></p>
+				<p class="text-sm text-secondary">
+					<label for="qid" class="sr-only">Quiz</label>
+					<select
+						id="qid"
+						bind:value={quizId}
+						class="mt-1 rounded-lg border border-outline-variant/30 bg-white px-2 py-1 text-sm font-mono"
+						onchange={load}
+					>
+						<option value="demo-quiz-001">demo-quiz-001</option>
+						<option value="mock-quiz-002">mock-quiz-002</option>
+					</select>
+				</p>
 			</div>
 		</div>
-		<div class="flex gap-2">
+		<div class="flex gap-2 flex-wrap">
 			<button
 				type="button"
 				class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-outline-variant/20 text-primary font-semibold hover:bg-surface-container"
@@ -75,6 +110,14 @@
 			>
 				<Timer class="w-4 h-4" />
 				Mark manual start
+			</button>
+			<button
+				type="button"
+				class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-outline-variant/30 text-secondary"
+				onclick={logout}
+			>
+				<LogOut class="w-4 h-4" />
+				Log out
 			</button>
 			<a href="/" class="inline-flex items-center px-4 py-2 rounded-lg text-secondary hover:text-primary">Home</a>
 		</div>
@@ -118,7 +161,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each payload.participants as p (p.participant_id)}
+						{#each payload.participants as p, i (i)}
 							<tr class="border-t border-outline-variant/10 hover:bg-surface-container-low/50">
 								<td class="px-6 py-3 font-mono text-xs">{p.participant_id}</td>
 								<td class="px-6 py-3">{p.full_name || '—'}</td>
@@ -129,7 +172,9 @@
 							</tr>
 						{:else}
 							<tr>
-								<td colspan="6" class="px-6 py-8 text-center text-secondary">No participants yet. Sync runs when students take the exam online.</td>
+								<td colspan="6" class="px-6 py-8 text-center text-secondary"
+									>No participants yet. Sync runs when students take the exam online.</td
+								>
 							</tr>
 						{/each}
 					</tbody>

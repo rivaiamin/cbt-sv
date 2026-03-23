@@ -9,6 +9,8 @@ function getSecret(): Uint8Array {
 export interface SessionJwtPayload {
 	sub: string;
 	quiz_id: string;
+	/** Exam attempt id (RxDB session / participant_states.session_id) */
+	session_id: string;
 	full_name?: string;
 	server_now: number;
 	ends_at: number;
@@ -18,6 +20,7 @@ export async function signSessionJwt(payload: SessionJwtPayload, ttlSeconds: num
 	const nowSec = Math.floor(Date.now() / 1000);
 	return new SignJWT({
 		quiz_id: payload.quiz_id,
+		session_id: payload.session_id,
 		full_name: payload.full_name,
 		server_now: payload.server_now,
 		ends_at: payload.ends_at

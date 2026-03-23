@@ -40,12 +40,12 @@ export async function rebuildOrderedBlocksFromLayout(
 	});
 }
 
-export async function loadAnswersForParticipant(participantId: string): Promise<{
+export async function loadAnswersForSession(sessionId: string): Promise<{
 	answers: Record<string, string>;
 	flagged: Set<string>;
 }> {
 	const db = await getExamDatabase();
-	const recs = await db.answer_record.find({ selector: { participant_id: participantId } }).exec();
+	const recs = await db.answer_record.find({ selector: { session_id: sessionId } }).exec();
 	const answers: Record<string, string> = {};
 	const flagged = new Set<string>();
 	for (const r of recs) {

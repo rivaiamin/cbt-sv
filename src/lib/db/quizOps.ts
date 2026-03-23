@@ -47,8 +47,7 @@ export interface SessionLayoutResult {
 	questionOrders: Record<string, string[]>;
 }
 
-export function computeShuffledLayout(bundle: QuizBundle): SessionLayoutResult {
-	const sessionId = crypto.randomUUID();
+export function computeShuffledLayout(bundle: QuizBundle, sessionId: string): SessionLayoutResult {
 	const blockOrder = shuffleArray(bundle.blocks.map((b) => b.block_id));
 	const questionOrders: Record<string, string[]> = {};
 

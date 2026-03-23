@@ -7,7 +7,7 @@ import {
 	computeShuffledLayout,
 	type SessionLayoutResult
 } from '$lib/db/quizOps';
-import { rebuildOrderedBlocksFromLayout, loadAnswersForParticipant } from '$lib/db/sessionRestore';
+import { rebuildOrderedBlocksFromLayout, loadAnswersForSession } from '$lib/db/sessionRestore';
 import { loadUiSettings, saveUiSettings } from '$lib/db/uiSettings';
 import type { QuizBundle } from '$lib/types/quiz';
 import type { ExamState, ProctoringRules } from '$lib/types/exam';
@@ -17,6 +17,10 @@ export type { ProctoringRules } from '$lib/types/exam';
 export type { Question, ExamBlock } from '$lib/types/quiz';
 
 const SESSION_KEY = 'cbt_session_meta';
+
+function participantStateId(participantId: string, quizId: string): string {
+	return `${participantId}__${quizId}`;
+}
 
 function sessionMeta(): { sessionId: string; quizId: string; participantId: string } | null {
 	if (!browser) return null;
@@ -75,17 +79,19 @@ function flattenIndices(orderedBlocks: ExamState['orderedBlocks']) {
 }
 
 async function upsertAnswerRecord(
+	sessionId: string,
 	participantId: string,
 	questionId: string,
 	partial: { selected_option_id?: string; is_doubtful?: boolean }
 ) {
 	const db = await getExamDatabase();
-	const id = `${participantId}_${questionId}`;
+	const id = `${sessionId}_${questionId}`;
 	const existing = await db.answer_record.findOne(id).exec();
 	const prev = existing ? existing.toMutableJSON() : null;
 	const updated_at = Date.now();
 	const base = {
 		id,
+		session_id: sessionId,
 		participant_id: participantId,
 		question_id: questionId,
 		selected_option_id: partial.selected_option_id ?? prev?.selected_option_id ?? '',
@@ -96,6 +102,7 @@ async function upsertAnswerRecord(
 }
 
 async function upsertParticipantState(
+	sessionId: string,
 	participantId: string,
 	quizId: string,
 	partial: Partial<{
@@ -107,9 +114,12 @@ async function upsertParticipantState(
 	}>
 ) {
 	const db = await getExamDatabase();
-	const existing = await db.participant_state.findOne(participantId).exec();
+	const id = participantStateId(participantId, quizId);
+	const existing = await db.participant_state.findOne(id).exec();
 	const prev = existing ? existing.toMutableJSON() : null;
 	const row = {
+		id,
+		session_id: sessionId,
 		participant_id: participantId,
 		quiz_id: quizId,
 		status: partial.status ?? prev?.status ?? 'active',
@@ -127,8 +137,8 @@ const createExamStore = () => {
 
 	const syncNav = async (globalIndex: number) => {
 		const s = get({ subscribe });
-		if (!s.studentId || !s.quizId) return;
-		await upsertParticipantState(s.studentId, s.quizId, {
+		if (!s.studentId || !s.quizId || !s.sessionId) return;
+		await upsertParticipantState(s.sessionId, s.studentId, s.quizId, {
 			current_question_index: globalIndex,
 			answered_count: Object.keys(s.answers).length
 		});
@@ -148,25 +158,61 @@ const createExamStore = () => {
 				proctoringRules: ui.proctoringRules
 			}));
 		},
-		async tryRestoreSession(): Promise<boolean> {
+		async tryRestoreSession(
+			expectedQuizId?: string,
+			participantIdOverride?: string,
+			fullNameOverride?: string
+		): Promise<boolean> {
 			if (!browser) return false;
 			const meta = sessionMeta();
-			if (!meta) return false;
-			const blocks = await rebuildOrderedBlocksFromLayout(meta.quizId, meta.sessionId);
-			if (!blocks?.length) {
+
+			// If sessionStorage metadata is missing, we fall back to the unique
+			// participant_state document in local RxDB (keyed by participant+quiz).
+			const participantId = participantIdOverride ?? meta?.participantId;
+			const quizId = expectedQuizId ?? meta?.quizId;
+			if (!quizId) return false;
+
+			// Ensure sessionStorage matches quizId if it exists.
+			if (expectedQuizId && meta?.quizId && meta.quizId !== expectedQuizId) {
 				setSessionMeta(null);
-				return false;
 			}
-			const { answers, flagged } = await loadAnswersForParticipant(meta.participantId);
+
+			const db = await getExamDatabase();
+			let state: {
+				session_id: string;
+				current_question_index: number;
+				time_remaining_seconds: number;
+				jwt_validation_token: string;
+			} | null = null;
+
+			if (participantId) {
+				const existingState = await db.participant_state
+					.findOne(participantStateId(participantId, quizId))
+					.exec();
+				state = existingState ? existingState.toMutableJSON() : null;
+			}
+
+			// Prefer sessionStorage sessionId; otherwise use participant_state.session_id.
+			const sessionId = meta?.sessionId ?? state?.session_id;
+			const resolvedParticipantId = meta?.participantId ?? (participantId ?? null);
+			if (!sessionId || !resolvedParticipantId) return false;
+
+			const blocks = await rebuildOrderedBlocksFromLayout(quizId, sessionId);
+			if (!blocks?.length) return false;
+
+			const { answers, flagged } = await loadAnswersForSession(sessionId);
 			const ui = await loadUiSettings();
+
+			const endsAtMs = Date.now() + Math.max(0, state?.time_remaining_seconds ?? 0) * 1000;
+
 			update((s) => ({
 				...s,
-				studentId: meta.participantId,
-				fullName: s.fullName,
-				quizId: meta.quizId,
-				sessionId: meta.sessionId,
+				studentId: resolvedParticipantId,
+				fullName: fullNameOverride ?? s.fullName,
+				quizId,
+				sessionId,
 				orderedBlocks: blocks,
-				currentGlobalIndex: 0,
+				currentGlobalIndex: state?.current_question_index ?? 0,
 				answers,
 				flagged,
 				durationMinutes: ui.durationMinutes,
@@ -174,21 +220,34 @@ const createExamStore = () => {
 				proctoringRules: ui.proctoringRules,
 				isStarted: true,
 				isSubmitted: false,
+				jwtToken: state?.jwt_validation_token ?? '',
+				endsAtMs,
+				serverSkewMs: 0,
 				startTime: Date.now()
 			}));
+
+			// Rehydrate sessionStorage for the rest of this tab.
+			setSessionMeta({
+				sessionId,
+				quizId,
+				participantId: resolvedParticipantId
+			});
+
 			return true;
 		},
 		async unlockAndStartSession(opts: {
 			studentId: string;
 			fullName: string;
 			bundle: QuizBundle;
+			/** Server-issued exam attempt id */
+			sessionId: string;
 			jwtToken: string;
 			endsAtMs: number;
 			serverNowMs: number;
 		}): Promise<void> {
-			const { studentId, fullName, bundle, jwtToken, endsAtMs, serverNowMs } = opts;
+			const { studentId, fullName, bundle, sessionId, jwtToken, endsAtMs, serverNowMs } = opts;
 			await importQuizBundleIntoRxDB(bundle);
-			const layout: SessionLayoutResult = computeShuffledLayout(bundle);
+			const layout: SessionLayoutResult = computeShuffledLayout(bundle, sessionId);
 			await persistSessionLayout(studentId, bundle.quiz_metadata.quiz_id, layout);
 
 			const skew = serverNowMs - Date.now();
@@ -204,7 +263,7 @@ const createExamStore = () => {
 				studentId,
 				fullName,
 				quizId: bundle.quiz_metadata.quiz_id,
-				sessionId: layout.sessionId,
+				sessionId,
 				orderedBlocks: layout.orderedBlocks,
 				currentGlobalIndex: 0,
 				answers: {},
@@ -221,7 +280,7 @@ const createExamStore = () => {
 				securityEventCount: 0
 			}));
 
-			await upsertParticipantState(studentId, bundle.quiz_metadata.quiz_id, {
+			await upsertParticipantState(sessionId, studentId, bundle.quiz_metadata.quiz_id, {
 				status: 'active',
 				current_question_index: 0,
 				answered_count: 0,
@@ -249,8 +308,8 @@ const createExamStore = () => {
 				...st,
 				answers
 			}));
-			await upsertAnswerRecord(s.studentId, questionId, { selected_option_id: optionId });
-			await upsertParticipantState(s.studentId, s.quizId, {
+			await upsertAnswerRecord(s.sessionId, s.studentId, questionId, { selected_option_id: optionId });
+			await upsertParticipantState(s.sessionId, s.studentId, s.quizId, {
 				answered_count: answeredCount,
 				current_question_index: s.currentGlobalIndex
 			});
@@ -270,7 +329,7 @@ const createExamStore = () => {
 			}
 			update((st) => ({ ...st, flagged }));
 			const opt = s.answers[questionId] ?? '';
-			await upsertAnswerRecord(s.studentId, questionId, {
+			await upsertAnswerRecord(s.sessionId, s.studentId, questionId, {
 				selected_option_id: opt,
 				is_doubtful: doubtful
 			});
@@ -325,8 +384,8 @@ const createExamStore = () => {
 		async submit() {
 			const s = get({ subscribe });
 			update((st) => ({ ...st, isSubmitted: true }));
-			if (s.studentId && s.quizId) {
-				await upsertParticipantState(s.studentId, s.quizId, { status: 'submitted' });
+			if (s.studentId && s.quizId && s.sessionId) {
+				await upsertParticipantState(s.sessionId, s.studentId, s.quizId, { status: 'submitted' });
 			}
 			setSessionMeta(null);
 			void triggerSync();
@@ -355,13 +414,25 @@ const createExamStore = () => {
 				proctoringRules: s.proctoringRules
 			});
 		},
-		setJwtTiming(jwt: string, endsAtMs: number, serverNowMs: number) {
+		async setJwtTiming(jwt: string, endsAtMs: number, serverNowMs: number) {
 			update((s) => ({
 				...s,
 				jwtToken: jwt,
 				endsAtMs,
 				serverSkewMs: serverNowMs - Date.now()
 			}));
+
+			// Keep participant_state in sync so the operator dashboard receives
+			// updated time_remaining_seconds via the normal sync pipeline.
+			const s = get({ subscribe });
+			if (!s.sessionId || !s.studentId || !s.quizId) return;
+
+			const time_remaining_seconds = Math.max(0, Math.floor((endsAtMs - serverNowMs) / 1000));
+			await upsertParticipantState(s.sessionId, s.studentId, s.quizId, {
+				jwt_validation_token: jwt,
+				time_remaining_seconds
+			});
+			void triggerSync();
 		},
 		reset: () => {
 			setSessionMeta(null);

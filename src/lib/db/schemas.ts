@@ -48,6 +48,7 @@ export const questionBlockSchema: RxJsonSchema<{
 
 export const answerRecordSchema: RxJsonSchema<{
 	id: string;
+	session_id: string;
 	participant_id: string;
 	question_id: string;
 	selected_option_id: string;
@@ -59,17 +60,20 @@ export const answerRecordSchema: RxJsonSchema<{
 	type: 'object',
 	properties: {
 		id: { type: 'string', maxLength: 400 },
+		session_id: { type: 'string', maxLength: 200 },
 		participant_id: { type: 'string', maxLength: 200 },
 		question_id: { type: 'string', maxLength: 200 },
 		selected_option_id: { type: 'string', maxLength: 200 },
 		is_doubtful: { type: 'boolean' },
 		updated_at: { type: 'number' }
 	},
-	required: ['id', 'participant_id', 'question_id', 'updated_at'],
-	indexes: ['participant_id', 'question_id']
+	required: ['id', 'session_id', 'participant_id', 'question_id', 'updated_at'],
+	indexes: ['participant_id', 'question_id', 'session_id']
 };
 
 export const participantStateSchema: RxJsonSchema<{
+	id: string;
+	session_id: string;
 	participant_id: string;
 	quiz_id: string;
 	status: string;
@@ -79,9 +83,11 @@ export const participantStateSchema: RxJsonSchema<{
 	jwt_validation_token: string;
 }> = {
 	version: 0,
-	primaryKey: 'participant_id',
+	primaryKey: 'id',
 	type: 'object',
 	properties: {
+		id: { type: 'string', maxLength: 400 },
+		session_id: { type: 'string', maxLength: 200 },
 		participant_id: { type: 'string', maxLength: 200 },
 		quiz_id: { type: 'string', maxLength: 200 },
 		status: { type: 'string', maxLength: 40 },
@@ -90,8 +96,8 @@ export const participantStateSchema: RxJsonSchema<{
 		time_remaining_seconds: { type: 'number' },
 		jwt_validation_token: { type: 'string', maxLength: 8000 }
 	},
-	required: ['participant_id', 'quiz_id', 'status'],
-	indexes: ['quiz_id']
+	required: ['id', 'session_id', 'participant_id', 'quiz_id', 'status'],
+	indexes: ['quiz_id', 'participant_id']
 };
 
 export const securityLogSchema: RxJsonSchema<{

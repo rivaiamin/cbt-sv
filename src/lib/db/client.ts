@@ -34,6 +34,7 @@ export type ExamCollections = {
 	question_block: RxCollection<QuestionBlockDoc>;
 	answer_record: RxCollection<{
 		id: string;
+		session_id: string;
 		participant_id: string;
 		question_id: string;
 		selected_option_id: string;
@@ -41,6 +42,8 @@ export type ExamCollections = {
 		updated_at: number;
 	}>;
 	participant_state: RxCollection<{
+		id: string;
+		session_id: string;
 		participant_id: string;
 		quiz_id: string;
 		status: string;
@@ -85,7 +88,7 @@ export function getExamDatabase(): Promise<ExamDatabase> {
 
 async function createExamDatabase(): Promise<ExamDatabase> {
 	const db = await createRxDatabase({
-		name: 'cbt_exam',
+		name: 'cbt_exam_v2',
 		storage: getRxStorageDexie(),
 		ignoreDuplicate: true
 	});

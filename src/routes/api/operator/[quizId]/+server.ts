@@ -2,7 +2,19 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getServerDb } from '$lib/server/db';
 
-export const GET: RequestHandler = async ({ params }) => {
+function requireStaff(locals: App.Locals) {
+	if (!locals.user) {
+		throw error(401, 'Unauthorized');
+	}
+	const role = locals.user.role as string;
+	if (role !== 'operator' && role !== 'admin') {
+		throw error(403, 'Operator or admin only');
+	}
+}
+
+export const GET: RequestHandler = async ({ params, locals }) => {
+	requireStaff(locals);
+
 	const { quizId } = params;
 	const db = getServerDb();
 	const meta = db.prepare('SELECT * FROM quiz_metadata WHERE quiz_id = ?').get(quizId) as
@@ -45,7 +57,9 @@ export const GET: RequestHandler = async ({ params }) => {
 	});
 };
 
-export const PATCH: RequestHandler = async ({ params, request }) => {
+export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+	requireStaff(locals);
+
 	const { quizId } = params;
 	const body = await request.json().catch(() => ({}));
 	const db = getServerDb();
