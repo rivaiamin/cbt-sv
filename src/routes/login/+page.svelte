@@ -26,14 +26,15 @@
 			}
 			const role = (j as { role?: string }).role;
 			const redir = $page.url.searchParams.get('redirect');
+			const navOpts = { invalidateAll: true as const };
 			if (redir && redir.startsWith('/')) {
-				await goto(redir);
+				await goto(redir, navOpts);
 				return;
 			}
-			if (role === 'participant') await goto('/participant');
-			else if (role === 'operator') await goto('/operator');
-			else if (role === 'admin') await goto('/admin');
-			else await goto('/');
+			if (role === 'participant') await goto('/participant', navOpts);
+			else if (role === 'operator') await goto('/operator', navOpts);
+			else if (role === 'admin') await goto('/admin', navOpts);
+			else await goto('/', navOpts);
 		} catch {
 			error = 'Network error';
 		} finally {

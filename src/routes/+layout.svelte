@@ -1,6 +1,7 @@
 <script>
 	import '../index.css';
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 	import { examStore } from '$lib/examStore';
 	import { browser } from '$app/environment';
 	import { startBackgroundSync } from '$lib/sync/backgroundSync';
@@ -75,5 +76,7 @@
 </svelte:head>
 
 <div class="min-h-screen flex flex-col">
-	{@render children()}
+	{#key $page.url.pathname}
+		{@render children()}
+	{/key}
 </div>
