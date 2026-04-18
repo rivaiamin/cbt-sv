@@ -9,7 +9,7 @@ export const quizMetadataSchema: RxJsonSchema<{
 	passcode_interval: number;
 	operator_started_manually: boolean;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'quiz_id',
 	type: 'object',
 	properties: {
@@ -32,7 +32,7 @@ export const questionBlockSchema: RxJsonSchema<{
 	questions_json: string;
 	randomize_inner_questions: boolean;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'block_id',
 	type: 'object',
 	properties: {
@@ -55,7 +55,7 @@ export const answerRecordSchema: RxJsonSchema<{
 	is_doubtful: boolean;
 	updated_at: number;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'id',
 	type: 'object',
 	properties: {
@@ -82,7 +82,7 @@ export const participantStateSchema: RxJsonSchema<{
 	time_remaining_seconds: number;
 	jwt_validation_token: string;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'id',
 	type: 'object',
 	properties: {
@@ -108,7 +108,7 @@ export const securityLogSchema: RxJsonSchema<{
 	timestamp: number;
 	details: string;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'log_id',
 	type: 'object',
 	properties: {
@@ -130,7 +130,7 @@ export const sessionLayoutSchema: RxJsonSchema<{
 	block_order_json: string;
 	question_orders_json: string;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'id',
 	type: 'object',
 	properties: {
@@ -150,7 +150,7 @@ export const uiSettingsSchema: RxJsonSchema<{
 	max_questions: number;
 	proctoring_json: string;
 }> = {
-	version: 0,
+	version: 1,
 	primaryKey: 'id',
 	type: 'object',
 	properties: {

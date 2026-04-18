@@ -1,5 +1,7 @@
-import { createRxDatabase } from 'rxdb/plugins/core';
+import { createRxDatabase, addRxPlugin } from 'rxdb/plugins/core';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
+import { RxDBMigrationSchemaPlugin } from 'rxdb/plugins/migration-schema';
+import type { MigrationStrategy } from 'rxdb';
 import type { RxDatabase, RxCollection } from 'rxdb';
 import {
 	quizMetadataSchema,
@@ -10,6 +12,8 @@ import {
 	sessionLayoutSchema,
 	uiSettingsSchema
 } from './schemas';
+
+addRxPlugin(RxDBMigrationSchemaPlugin);
 
 export type QuizMetadataDoc = {
 	quiz_id: string;
@@ -79,6 +83,31 @@ export type ExamDatabase = RxDatabase<ExamCollections>;
 
 let dbPromise: Promise<ExamDatabase> | null = null;
 
+/** RxDB DB6: bump schema version when hashes change; identity keeps existing docs valid. */
+const toV1: MigrationStrategy<unknown> = (oldDoc) => oldDoc;
+
+/**
+ * Running v0→v1 migrations in parallel (default autoMigrate) races on Dexie and can close storages
+ * mid-migration (DM4 / "RxStorageInstanceDexie is closed"). Disable auto-migrate and await each
+ * migration in order after all collections exist.
+ */
+const migrationOpts = { migrationStrategies: { 1: toV1 }, autoMigrate: false as const };
+
+const COLLECTIONS_IN_MIGRATION_ORDER = [
+	'quiz_metadata',
+	'question_block',
+	'answer_record',
+	'participant_state',
+	'security_log',
+	'session_layout',
+	'ui_settings'
+] as const;
+
+/** migration-schema plugin adds this; types don't include it on RxCollection. */
+type MigratableCollection = RxCollection & {
+	migratePromise: (batchSize?: number) => Promise<unknown>;
+};
+
 export function getExamDatabase(): Promise<ExamDatabase> {
 	if (!dbPromise) {
 		dbPromise = createExamDatabase();
@@ -94,14 +123,18 @@ async function createExamDatabase(): Promise<ExamDatabase> {
 	});
 
 	await db.addCollections({
-		quiz_metadata: { schema: quizMetadataSchema },
-		question_block: { schema: questionBlockSchema },
-		answer_record: { schema: answerRecordSchema },
-		participant_state: { schema: participantStateSchema },
-		security_log: { schema: securityLogSchema },
-		session_layout: { schema: sessionLayoutSchema },
-		ui_settings: { schema: uiSettingsSchema }
+		quiz_metadata: { schema: quizMetadataSchema, ...migrationOpts },
+		question_block: { schema: questionBlockSchema, ...migrationOpts },
+		answer_record: { schema: answerRecordSchema, ...migrationOpts },
+		participant_state: { schema: participantStateSchema, ...migrationOpts },
+		security_log: { schema: securityLogSchema, ...migrationOpts },
+		session_layout: { schema: sessionLayoutSchema, ...migrationOpts },
+		ui_settings: { schema: uiSettingsSchema, ...migrationOpts }
 	});
+
+	for (const name of COLLECTIONS_IN_MIGRATION_ORDER) {
+		await (db.collections[name] as MigratableCollection).migratePromise();
+	}
 
 	return db as unknown as ExamDatabase;
 }
