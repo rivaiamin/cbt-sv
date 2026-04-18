@@ -7,4 +7,4 @@ coverage/
 .env*
 !.env.example
 .svelte-kit/
-data/
+/data/

@@ -1,0 +1,110 @@
+{
+	"quiz_metadata": {
+		"quiz_id": "demo-quiz-001",
+		"title": "Sample quiz",
+		"start_time": 0,
+		"duration_minutes": 60,
+		"passcode_seed": "JBSWY3DPEHPK3PXP",
+		"passcode_interval": 30,
+		"operator_started_manually": false
+	},
+	"blocks": [
+		{
+			"block_id": "block-a",
+			"shared_content": "This is sample shared content for the first block.",
+			"randomize_inner_questions": true,
+			"questions": [
+				{
+					"question_id": "q1",
+					"question_text": "What is 2 + 2?",
+					"options": [
+						{ "option_id": "q1-a", "text": "3" },
+						{ "option_id": "q1-b", "text": "4" },
+						{ "option_id": "q1-c", "text": "5" }
+					]
+				},
+				{
+					"question_id": "q2",
+					"question_text": "Pick a vowel.",
+					"options": [
+						{ "option_id": "q2-a", "text": "A" },
+						{ "option_id": "q2-b", "text": "E" },
+						{ "option_id": "q2-c", "text": "Z" }
+					]
+				},
+				{
+					"question_id": "q3",
+					"question_text": "Which planet is known as the Red Planet?",
+					"options": [
+						{ "option_id": "q3-a", "text": "Mars" },
+						{ "option_id": "q3-b", "text": "Venus" },
+						{ "option_id": "q3-c", "text": "Jupiter" }
+					]
+				},
+				{
+					"question_id": "q4",
+					"question_text": "What is the capital of France?",
+					"options": [
+						{ "option_id": "q4-a", "text": "Berlin" },
+						{ "option_id": "q4-b", "text": "Madrid" },
+						{ "option_id": "q4-c", "text": "Paris" }
+					]
+				},
+				{
+					"question_id": "q5",
+					"question_text": "Who wrote 'Hamlet'?",
+					"options": [
+						{ "option_id": "q5-a", "text": "Mark Twain" },
+						{ "option_id": "q5-b", "text": "William Shakespeare" },
+						{ "option_id": "q5-c", "text": "Jane Austen" }
+					]
+				},
+				{
+					"question_id": "q6",
+					"question_text": "What is the boiling point of water at sea level?",
+					"options": [
+						{ "option_id": "q6-a", "text": "100°C" },
+						{ "option_id": "q6-b", "text": "212°C" },
+						{ "option_id": "q6-c", "text": "0°C" }
+					]
+				},
+				{
+					"question_id": "q7",
+					"question_text": "Which is the largest mammal?",
+					"options": [
+						{ "option_id": "q7-a", "text": "Elephant" },
+						{ "option_id": "q7-b", "text": "Blue Whale" },
+						{ "option_id": "q7-c", "text": "Giraffe" }
+					]
+				},
+				{
+					"question_id": "q8",
+					"question_text": "What color do you get by mixing blue and yellow?",
+					"options": [
+						{ "option_id": "q8-a", "text": "Green" },
+						{ "option_id": "q8-b", "text": "Purple" },
+						{ "option_id": "q8-c", "text": "Orange" }
+					]
+				},
+				{
+					"question_id": "q9",
+					"question_text": "Select the prime number.",
+					"options": [
+						{ "option_id": "q9-a", "text": "15" },
+						{ "option_id": "q9-b", "text": "17" },
+						{ "option_id": "q9-c", "text": "21" }
+					]
+				},
+				{
+					"question_id": "q10",
+					"question_text": "Which gas do plants absorb from the atmosphere?",
+					"options": [
+						{ "option_id": "q10-a", "text": "Oxygen" },
+						{ "option_id": "q10-b", "text": "Carbon Dioxide" },
+						{ "option_id": "q10-c", "text": "Nitrogen" }
+					]
+				}
+			]
+		}
+	]
+}

@@ -1,0 +1,28 @@
+{
+	"quiz_metadata": {
+		"quiz_id": "mock-quiz-002",
+		"title": "Mock synced quiz",
+		"start_time": 0,
+		"duration_minutes": 45,
+		"passcode_seed": "KZXW4Y3VEMPK5RXP",
+		"passcode_interval": 30,
+		"operator_started_manually": false
+	},
+	"blocks": [
+		{
+			"block_id": "block-m1",
+			"shared_content": "Synced via mock external API.",
+			"randomize_inner_questions": false,
+			"questions": [
+				{
+					"question_id": "mq1",
+					"question_text": "Mock question one?",
+					"options": [
+						{ "option_id": "mq1-a", "text": "Yes" },
+						{ "option_id": "mq1-b", "text": "No" }
+					]
+				}
+			]
+		}
+	]
+}
